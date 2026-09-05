@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: dad-s-weather-app
+    runtime: static
+    staticPublishPath: .
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: no-cache, no-store, must-revalidate
+      - path: /*
+        name: Pragma
+        value: no-cache
