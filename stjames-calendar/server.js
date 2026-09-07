@@ -102,6 +102,7 @@ async function pushLoop() {
 }
 
 let conditions = { ok:false, updated:null, error:'not loaded yet', text:'', lines:[] };
+try { const saved = JSON.parse(fs.readFileSync('/tmp/skywatch-conditions.json','utf8')); if (saved && saved.lines && saved.lines.length) conditions = { ...saved, stale:true }; } catch(e) {}
 
 // ---- daily course conditions page (members only) ----
 const DINING = /\b(aces|pantry|grill|grille|restaurant|bar\b|bistro|cafe|dining|lunch|dinner|brunch|breakfast|happy hour|pool|tennis|pickleball|fitness|wellness|spa|service|kitchen|patio|tavern|lounge|market)\b/i;
@@ -131,10 +132,18 @@ async function refreshConditions() {
     if (/type=["']?password/i.test(r.text)) throw new Error('got the login page instead of conditions — login not accepted');
     const { lines, all } = htmlToLines(r.text);
     if (!lines.length) throw new Error('page had no readable text');
-    conditions = { ok:true, updated:new Date().toISOString(), lines, text: lines.join('\n'), _all: all.slice(0, 400) };
+    conditions = { ok:true, updated:new Date().toISOString(), fetched:new Date().toISOString(), lines, text: lines.join('\n'), _all: all.slice(0, 400), stale:false };
+    try { fs.writeFileSync('/tmp/skywatch-conditions.json', JSON.stringify({ ok:true, updated:conditions.updated, lines, text:conditions.text })); } catch(e) {}
     console.log(`conditions: ${lines.length} lines`);
-  } catch(e) { conditions = { ...conditions, ok:false, error:e.message, updated:new Date().toISOString() }; console.error('conditions failed:', e.message); }
+    condFailStreak = 0;
+  } catch(e) {
+    // keep the last good copy; just mark it stale and say why
+    conditions = { ...conditions, ok: !!(conditions.lines && conditions.lines.length), stale:true, error:e.message, lastTry:new Date().toISOString() };
+    condFailStreak++; condJar.clear();   // force a fresh login next time
+    console.error('conditions failed:', e.message);
+  }
 }
+let condFailStreak = 0;
 
 // ---- tiny cookie jars (one per login) ----
 const jar = new Map(), condJar = new Map();
@@ -290,6 +299,7 @@ app.listen(PORT, () => {
   console.log('listening on '+PORT);
   refresh().then(refreshConditions);
   setInterval(refresh, REFRESH_MIN*60*1000);
-  setInterval(refreshConditions, 2*60*60*1000);   // course conditions change each morning; check every 2 hours
+  setInterval(() => refreshConditions(), 30*60*1000);          // every 30 minutes
+  setInterval(() => { if (condFailStreak > 0) refreshConditions(); }, 5*60*1000);   // and every 5 minutes while it's failing
   if (PUSH_OK) { lxConnect(); pushLoop(); setInterval(pushLoop, 3*60*1000); console.log('push watcher on'); } else console.log('push watcher off (set VAPID_PUBLIC / VAPID_PRIVATE)');
 });
