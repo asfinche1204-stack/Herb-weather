@@ -650,7 +650,7 @@
 (() => {
   'use strict';
   // ---------- self-updating: bump BUILD on every release ----------
-  const BUILD = '2026-09-07.68';
+  const BUILD = '2026-09-07.70';
   // Shared edition: the same file saved as neighbors.html hides the family houses.
   const SHARED = /neighbors/i.test(location.pathname);
   const DEFAULT_LOC = SHARED ? {lat:33.9426, lon:-78.1222, name:'St. James', region:'Southport, NC'} : {lat:33.9355, lon:-78.0950, name:"Mom & Dad's house", region:'Southport, NC'};
@@ -1446,7 +1446,7 @@
     if (/start(ing)? on hole|start on #|play starting/.test(low)) { const h = l.match(/#\s*(\d+)/); b.badges.push({cls:'', icon:'flag', text: 'Start on #'+(h ? h[1] : '1')}); used = true; }
     if (/shotgun/.test(low)) { const t = l.match(/(\d{1,2}(?::\d{2})?\s*(?:am|pm))/i); const ev = l.match(/\(([^)]+)\)/); b.badges.push({cls:'blue', icon:'users', text: (t ? t[1].replace(/\s+/,'').toUpperCase()+' ' : '')+'shotgun'+(ev ? ' · '+ev[1] : '')}); used = true; }
     if (/single tee|tee times? (start|begin)/.test(low)) { const t = l.match(/(\d{1,2}(?::\d{2})?\s*(?:am|pm))/i); const from = l.match(/-\s*(.+)$/); b.badges.push({cls:'blue', icon:'clock', text: (t ? t[1].replace(/\s+/,'').toUpperCase()+' ' : '')+'single tee'+(from ? ' · '+from[1].trim() : '')}); used = true; }
-    if (/gps hole|gps pins?/.test(low)) { b.badges.push({cls:'', icon:'pin', text:'GPS pin locations'}); used = true; }
+    if (/gps hole|gps pins?/.test(low)) used = true;   // GPS pins are standard at St. James; nothing to say
     if (/range .*clos|driving range/.test(low)) used = true;   // shown once at the bottom
     if (!used && !/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(low)) b.items.push(l);
   }
@@ -1670,8 +1670,8 @@
     if (!homesData) { $('homes').innerHTML = '<div class="quiet">Loading the other houses…</div>'; return; }
     $('homes').innerHTML = HOMES.map((h,i) => {
       const w = homesData[i]; if (!w) return '';
-      const c = w.current, d = w.daily, [desc, ic] = WMO(c.weather_code, !!c.is_day);
-      const here = Math.abs(loc.lat-h.lat)<0.02 && Math.abs(loc.lon-h.lon)<0.02;
+      const c = w.current, d = w.daily; const here = Math.abs(loc.lat-h.lat)<0.02 && Math.abs(loc.lon-h.lon)<0.02;
+      const code = here && data && data.current ? data.current.weather_code : c.weather_code; const [desc, ic] = WMO(code, !!c.is_day);
       return `<button class="home" data-i="${i}" aria-current="${here}"><div class="who">${h.who}'s house<small>${h.town}</small></div><div class="t">${T(c.temperature_2m)}°</div>${I[ic]}<div class="c">${desc} <span>· feels ${T(c.apparent_temperature)}°</span><br><span>High ${T(d.temperature_2m_max[0])}° · Low ${T(d.temperature_2m_min[0])}°</span>${d.precipitation_probability_max[0]>=10?` · <b>${d.precipitation_probability_max[0]}% rain</b>`:''}<br><span>Wind ${Math.round(c.wind_speed_10m)} mph ${dirName(c.wind_direction_10m)}</span></div></button>`;
     }).join('');
     $('homes').querySelectorAll('.home').forEach(b => b.addEventListener('click', () => { const h = HOMES[+b.dataset.i]; pick({lat:h.lat, lon:h.lon, name:h.who+"'s house", region:h.town}); }));
@@ -1874,17 +1874,23 @@
     img.onload = () => {
       try {
         const cv = document.createElement('canvas'); cv.width = cv.height = 256; const cx = cv.getContext('2d'); cx.drawImage(img, 0, 0);
-        // look at a 5x5 patch (~1 mi) and take the strongest echo
-        let best = null;
-        for (let dy=-2; dy<=2; dy++) for (let dx=-2; dx<=2; dx++) { const x = Math.min(255, Math.max(0, px+dx)), y = Math.min(255, Math.max(0, py+dy)); const d = cx.getImageData(x, y, 1, 1).data; if (d[3] < 40) continue;
-          const [r,g,b] = d; let cat, rank;
-          if (r > 150 && b > 150 && g < 120) { cat = 'hail-sized'; rank = 5; }            // purple/magenta
-          else if (r > 170 && g < 120) { cat = 'heavy'; rank = 4; }                        // red
-          else if (r > 170 && g > 120) { cat = 'moderate to heavy'; rank = 3; }             // orange/yellow
-          else if (g > 120 && r < 120) { cat = 'moderate'; rank = 2; }                     // green
-          else { cat = 'light'; rank = 1; }                                                 // blue/cyan
-          if (!best || rank > best.rank) best = {cat, rank}; }
-        radarHere = { cat: best ? best.cat : 'none', rank: best ? best.rank : 0, at: Date.now() };
+        // look at a 7x7 patch (~1.5 mi): count echo pixels by strength, ignore speckle
+        const counts = [0,0,0,0,0,0]; let total = 0;
+        for (let dy=-3; dy<=3; dy++) for (let dx=-3; dx<=3; dx++) { const x = Math.min(255, Math.max(0, px+dx)), y = Math.min(255, Math.max(0, py+dy)); const d = cx.getImageData(x, y, 1, 1).data; total++; if (d[3] < 40) continue;
+          const [r,g,b] = d; let rank;
+          if (r > 150 && b > 150 && g < 120) rank = 5;            // purple/magenta: hail-sized
+          else if (r > 170 && g < 120) rank = 4;                  // red: heavy
+          else if (r > 170 && g > 120) rank = 3;                  // orange/yellow: moderate to heavy
+          else if (g > 120 && r < 120 && b < 140) rank = 2;       // green: moderate
+          else rank = 1;                                          // blue/cyan: light (often clutter near the coast)
+          counts[rank]++; }
+        const CATS = ['none','light','moderate','moderate to heavy','heavy','hail-sized'];
+        const strong = counts[2]+counts[3]+counts[4]+counts[5], any = strong + counts[1];
+        // real rain covers most of the patch; a few blue pixels are clutter and light needs corroboration
+        let rank = 0;
+        if (strong >= 12) rank = counts[5] >= 6 ? 5 : counts[4] >= 6 ? 4 : counts[3] >= 6 ? 3 : 2;
+        else if (any >= 30) { const wet = data && data.current && ((data.current.precipitation||0) >= 0.01 || data.current.weather_code >= 51) || (lastObs && lastObs.code); rank = wet ? 1 : 0; }
+        radarHere = { cat: CATS[rank], rank, at: Date.now(), coverage: Math.round(any/total*100) };
       } catch(e) { radarHere = null; }   // tile server didn't allow pixel reads; fall back to forecast/observation
       rainHereFromForecast(); if ($('etaList')) drawProjected(product==='HRRR' && frames[radarIdx] ? frames[radarIdx].mins : 0);
       if (data) { reconcileCurrent(lastObs); render(); }
