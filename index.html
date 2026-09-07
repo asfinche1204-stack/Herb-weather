@@ -339,9 +339,11 @@
 
   /* course conditions */
   .cond{background:var(--glass-2);border:1px solid var(--glass-line);border-radius:.8rem;padding:.6rem .9rem;margin-bottom:.8rem;box-shadow:var(--tile-shadow)}
-  .cond summary{font-weight:700;cursor:pointer;display:flex;justify-content:space-between;gap:.5rem;align-items:baseline}
-  .cond summary span{font-weight:400;color:var(--ink-2);font-size:.85rem}
-  .cond-body{margin-top:.6rem;font-size:.97rem;line-height:1.5;white-space:pre-wrap;max-height:50vh;overflow:auto}
+  .cond-head{display:flex;justify-content:space-between;gap:.5rem;align-items:baseline;flex-wrap:wrap}
+  .cond-head b{font-size:1.05rem}
+  .cond-head span{color:var(--ink-2);font-size:.85rem}
+  .cond-body{margin-top:.4rem;font-size:.97rem;line-height:1.5}
+  .cond .quiet{margin:.4rem 0 0}
   .cond-body b{display:block;margin-top:.5rem}
   .cond-body i{display:block;margin-top:.5rem;font-style:normal;color:var(--ink-2);font-size:.9rem}
   .cond-link{display:inline-block;margin-top:.6rem;color:var(--link);font-weight:700}
@@ -560,7 +562,7 @@
       <h2><button class="fold" id="golfFold" aria-expanded="true" aria-controls="golfBody"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>St. James golf</button><span id="golfStamp"></span></h2>
       <div class="fold-body" id="golfBody">
       <div class="courses" id="courses"></div>
-      <details class="cond" id="condBox"><summary>Daily course conditions <span id="condStamp"></span></summary><div class="cond-body" id="condText">Loading…</div><a class="cond-link" href="https://www.theclubsatstjames.com/member-home/daily-course-conditions" target="_blank" rel="noopener">Open on the club site ↗</a></details>
+      <div class="cond" id="condBox"><div class="cond-head"><b>Daily course conditions</b><span id="condStamp"></span></div><div class="cond-body" id="condText">Loading…</div><a class="cond-link" href="https://www.theclubsatstjames.com/member-home/daily-course-conditions" target="_blank" rel="noopener">Open on the club site ↗</a></div>
       <div class="play7" id="play7"></div>
       <ul class="events" id="events"></ul>
       <p class="note" id="feedStatus"></p>
@@ -648,7 +650,7 @@
 (() => {
   'use strict';
   // ---------- self-updating: bump BUILD on every release ----------
-  const BUILD = '2026-09-06.67';
+  const BUILD = '2026-09-07.68';
   // Shared edition: the same file saved as neighbors.html hides the family houses.
   const SHARED = /neighbors/i.test(location.pathname);
   const DEFAULT_LOC = SHARED ? {lat:33.9426, lon:-78.1222, name:'St. James', region:'Southport, NC'} : {lat:33.9355, lon:-78.0950, name:"Mom & Dad's house", region:'Southport, NC'};
@@ -1384,16 +1386,23 @@
   // Automatic feed from the private stjames-calendar worker (see README in that folder).
   const STJ_FEED = 'https://herb-weather.onrender.com/events.json';
   let feedEvents = store.get('feedEvents') || [];
+  let condRetry = 0;
   async function loadConditions() {
     if (!STJ_FEED) return;
+    const cached = store.get('condCache');
+    const showCached = why => { if (cached && cached.lines && cached.lines.length) { renderConditionCards(cached.lines); $('condStamp').textContent = 'last copy from '+new Date(cached.updated).toLocaleString([], {weekday:'short', hour:'numeric', minute:'2-digit'})+(why ? ' · '+why : ''); } else { $('condText').innerHTML = '<div class="quiet">'+(why || 'Nothing posted yet.')+'</div>'; $('condStamp').textContent = ''; } };
     try {
-      const j = await fetchJSON(STJ_FEED.replace('events.json','conditions.json') + '?t=' + Math.floor(Date.now()/600000), {cache:'no-store'}, 45000);
-      if (j && j.ok && j.lines && j.lines.length) {
+      const j = await fetchJSON(STJ_FEED.replace('events.json','conditions.json') + '?t=' + Math.floor(Date.now()/300000), {cache:'no-store'}, 60000);
+      if (j && j.lines && j.lines.length) {
         renderConditionCards(j.lines);
-        $('condStamp').textContent = 'as of '+new Date(j.updated).toLocaleString([], {weekday:'short', hour:'numeric', minute:'2-digit'});
-        const open = j.lines.join(' ').toLowerCase(); if (/closed|cart path|aerif|aerat|frost delay|delay/.test(open)) $('condBox').open = true;
-      } else $('condText').textContent = 'Course conditions feed: '+(j && j.error ? j.error : 'nothing posted yet');
-    } catch(e) { $('condText').textContent = 'Course conditions not reachable right now (the club feed may be waking up).'; }
+        store.set('condCache', {lines: j.lines, updated: j.updated});
+        $('condStamp').textContent = (j.stale ? 'last good copy · ' : 'as of ')+new Date(j.updated).toLocaleString([], {weekday:'short', hour:'numeric', minute:'2-digit'});
+        condRetry = 0;
+      } else showCached(j && j.error ? 'club feed: '+j.error : 'club feed has nothing yet');
+    } catch(e) {
+      showCached(condRetry < 3 ? 'refreshing…' : 'club feed not reachable');
+      if (condRetry++ < 3) setTimeout(loadConditions, 20000);   // the free server takes ~30 s to wake up
+    }
   }
   const CC_ICON = {
     cart:'<svg viewBox="0 0 24 24"><path d="M3 7h11l3 4h4v6h-2"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/><path d="M9 18h6M3 7v11h2"/></svg>',
