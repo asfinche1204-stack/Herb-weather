@@ -650,7 +650,7 @@
 (() => {
   'use strict';
   // ---------- self-updating: bump BUILD on every release ----------
-  const BUILD = '2026-09-07.70';
+  const BUILD = '2026-09-12.71';
   // Shared edition: the same file saved as neighbors.html hides the family houses.
   const SHARED = /neighbors/i.test(location.pathname);
   const DEFAULT_LOC = SHARED ? {lat:33.9426, lon:-78.1222, name:'St. James', region:'Southport, NC'} : {lat:33.9355, lon:-78.0950, name:"Mom & Dad's house", region:'Southport, NC'};
@@ -1258,6 +1258,8 @@
     jumpBtns.forEach(b => { const on = b.dataset.to === best; b.setAttribute('aria-current', String(on)); if (on) b.scrollIntoView({block:'nearest', inline:'center', behavior:'smooth'}); });
   }, {rootMargin:'-30% 0px -45% 0px', threshold:[0, .1, .25, .5, .75, 1]});
   jumpBtns.forEach(b => jumpObs.observe($(b.dataset.to)));
+  // the animated sky is the heaviest thing on the page: pause it while the radar section is in view
+  new IntersectionObserver(es => { es.forEach(e => { if (e.isIntersecting) { fxPage.pause(); } else if (!$('mapWrap').classList.contains('full')) { fxPage.resume(); } }); }, {threshold:0.2}).observe($('radarSec'));
 
   // collapsible sections (state remembered per section)
   document.querySelectorAll('.collapsible').forEach(sec => {
@@ -1736,9 +1738,9 @@
   const nearestSite = () => SITES.slice().sort((a,b) => haversine(loc.lat,loc.lon,a.lat,a.lon) - haversine(loc.lat,loc.lon,b.lat,b.lon))[0].id;
   function initMap() {
     if (map) return;
-    map = L.map('map', {zoomControl:false, attributionControl:true}).setView([loc.lat, loc.lon], 8);
+    map = L.map('map', {zoomControl:false, attributionControl:true, preferCanvas:true, zoomAnimation:false, fadeAnimation:false, markerZoomAnimation:false, maxZoom:11}).setView([loc.lat, loc.lon], 8);
     L.control.zoom({position:'bottomright'}).addTo(map);
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'© OpenStreetMap contributors · radar: NWS via Iowa State Mesonet', maxZoom:12, className:'osm-dark'}).addTo(map);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'© OpenStreetMap contributors · radar: NWS via Iowa State Mesonet', maxZoom:11, className:'osm-dark', keepBuffer:0, updateWhenZooming:false, updateWhenIdle:true}).addTo(map);
     homeMarker = L.circleMarker([loc.lat, loc.lon], {radius:6, color:'#fff', weight:2, fillColor:'#f2b441', fillOpacity:1}).addTo(map);
     map.on('movestart zoomstart', () => stopWind()); map.on('moveend zoomend', () => { if (showWind) loadWind(); });
   }
@@ -1754,7 +1756,8 @@
     initMap();
     if (!site) site = nearestSite();
     renderRadarChips(); stopRadar();
-    layers.forEach(l => map.removeLayer(l)); layers = []; frames = [];
+    layers.forEach(l => { try { map.removeLayer(l); } catch(e){} }); layers = []; frames = [];
+    if (lxLayer) { map.removeLayer(lxLayer); lxLayer = null; }
     if (siteMarker) map.removeLayer(siteMarker);
     const st = SITES.find(x => x.id===site);
     siteMarker = L.circleMarker([st.lat, st.lon], {radius:5, color:'#9cc9d6', weight:2, fillColor:'#0b1016', fillOpacity:1}).addTo(map).bindTooltip('K'+st.id+' radar');
@@ -1771,11 +1774,11 @@
       try { const meta = await fetchJSON(`${IEM}/data/gis/images/4326/hrrr/refd_1080.json?${Math.floor(Date.now()/600000)}`, null, 6000); const m = meta.meta || meta; const v = m.model_init_utc || m.model_init || m.init || m.valid; if (v) init = new Date(/Z$|[+-]\d\d:?\d\d$/.test(v) ? v : v + 'Z'); if (init && isNaN(init)) init = null; } catch(e) {}
       if (!init) { // Iowa State posts each HRRR run about 50 minutes after the hour; assume the newest one that's ready
         const d = new Date(); d.setUTCMinutes(0,0,0); if (new Date().getUTCMinutes() < 50) d.setUTCHours(d.getUTCHours()-1); init = d; }
-      const step = futureHours <= 6 ? 30 : 60;
+      const step = innerWidth < 700 ? (futureHours <= 3 ? 30 : 60) : (futureHours <= 6 ? 30 : 60);
       const nowMs = Date.now(); const elapsed = Math.max(0, Math.round((nowMs - init.getTime())/60000));   // minutes since the run started
       const m0 = Math.floor(elapsed/15)*15;   // model minute closest to now (HRRR frames are every 15 min)
       frames = []; for (let m = m0; m <= Math.min(1080, m0 + futureHours*60); m += step) { const valid = init.getTime() + m*60000; frames.push({ts: new Date(valid).toISOString(), tag: String(m).padStart(4,'0'), mins: Math.max(0, Math.round((valid - nowMs)/60000))}); }
-      layers = frames.map(f => L.tileLayer(`${IEM}/cache/tile.py/1.0.0/hrrr::REFD-F${f.tag}-0/{z}/{x}/{y}.png`, {opacity:0, zIndex:5, maxNativeZoom:9}).addTo(map));
+      layers = frames.map(f => L.tileLayer(`${IEM}/cache/tile.py/1.0.0/hrrr::REFD-F${f.tag}-0/{z}/{x}/{y}.png`, {opacity:0, zIndex:5, keepBuffer:0, updateWhenZooming:false, updateWhenIdle:true, maxNativeZoom:8}).addTo(map));
       $('frame').max = frames.length-1; showFrame(0);
       $('legend').innerHTML = `<div class="lname">HRRR model forecast of radar echoes${init ? ' · run of '+init.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : ''} · it\u2019s a forecast, so timing can be off by an hour or more</div><div class="lbar" style="background:linear-gradient(90deg,#04e9e7 0%,#019ff4 12%,#0300f4 24%,#02fd02 32%,#01c501 40%,#008e00 48%,#fdf802 56%,#e5bc00 62%,#fd9500 68%,#fd0000 76%,#bc0000 84%,#f800fd 92%,#fff 100%)"></div><div class="lticks"><span>5</span><span>20</span><span>35</span><span>50</span><span>65</span><span>75+</span></div>`;
       $('radarStatus').textContent = `future radar · next ${futureHours} hrs · cell paths`;
@@ -1785,7 +1788,7 @@
     }
     if (product==='SATIR' || product==='SATVIS') {
       // GOES-East from Iowa State's WMS: channel 13 (infrared, works day and night) or channel 2 (visible)
-      const layer = L.tileLayer.wms(`${IEM}/cgi-bin/wms/goes_east.cgi`, {layers: product==='SATIR' ? 'conus_ch13' : 'conus_ch02', format:'image/png', transparent:true, opacity, zIndex:5});
+      const layer = L.tileLayer.wms(`${IEM}/cgi-bin/wms/goes_east.cgi`, {layers: product==='SATIR' ? 'conus_ch13' : 'conus_ch02', format:'image/png', transparent:true, opacity, zIndex:5, keepBuffer:0, updateWhenZooming:false, updateWhenIdle:true});
       layers = [layer.addTo(map)]; frames = [{ts:null, tag:'0'}]; $('frame').max = 0; showFrame(0);
       $('legend').innerHTML = product==='SATIR' ? '<div class="lname">Infrared: brighter and whiter = colder, taller cloud tops (stronger storms)</div>' : '<div class="lname">Visible light: daytime only, goes dark after sunset</div>';
       $('radarStatus').textContent = 'GOES-East satellite'; loadWarnings(); loadCells(); lxConnect(); if (!lxTimer) lxTimer = setInterval(lxDraw, 5000); lxDraw(); if (showWind) loadWind();
@@ -1798,15 +1801,15 @@
       try {
         const now = new Date(), start = new Date(now.getTime() - 70*60000);
         const j = await fetchJSON(`${IEM}/json/radar.py?operation=list&radar=${site}&product=${product}&start=${isoZ(start)}&end=${isoZ(now)}`, null, 8000);
-        times = (j.scans||[]).map(x => x.ts).slice(-12);
+        times = (j.scans||[]).map(x => x.ts).slice(-(innerWidth < 700 ? 7 : 12));
       } catch(e){}
     } else {
       const now = new Date(); now.setUTCSeconds(0,0); now.setUTCMinutes(Math.floor(now.getUTCMinutes()/5)*5 - 5);
-      for (let i=11;i>=0;i--) { const d = new Date(now.getTime() - i*5*60000); times.push(`${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}Z`); }
+      for (let i=(innerWidth < 700 ? 6 : 11);i>=0;i--) { const d = new Date(now.getTime() - i*5*60000); times.push(`${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}Z`); }
     }
     frames = times.map(t => ({ts:t, tag:t.replace(/[-:TZ]/g,'').slice(0,12)}));
     frames.push({ts:null, tag:'0'});   // latest
-    layers = frames.map(f => L.tileLayer(`${IEM}/cache/tile.py/1.0.0/ridge::${key}-${f.tag}/{z}/{x}/{y}.png`, {opacity:0, zIndex:5, maxNativeZoom:10}).addTo(map));
+    layers = frames.map(f => L.tileLayer(`${IEM}/cache/tile.py/1.0.0/ridge::${key}-${f.tag}/{z}/{x}/{y}.png`, {opacity:0, zIndex:5, keepBuffer:0, updateWhenZooming:false, updateWhenIdle:true, maxNativeZoom:9}).addTo(map));
     $('frame').max = frames.length-1;
     showFrame(frames.length-1);
     $('radarStatus').textContent = product==='USCOMP' ? 'regional mosaic' : `K${site} · ${PRODUCTS.find(x=>x.id===product).name}`;
@@ -1832,6 +1835,7 @@
     const w = $('mapWrap'); const goFull = !w.classList.contains('full');
     if (goFull) { mapHome = {parent: w.parentNode, next: w.nextSibling}; document.body.appendChild(w); w.classList.add('full'); document.body.style.overflow = 'hidden'; }
     else { w.classList.remove('full'); mapHome.parent.insertBefore(w, mapHome.next); document.body.style.overflow = ''; }
+    if (goFull) { fxHero.pause(); fxPage.pause(); } else { fxHero.resume(); fxPage.resume(); }
     setTimeout(() => { map.invalidateSize(); if (showWind) loadWind(); }, 80);
   });
   document.addEventListener('keydown', e => { if (e.key==='Escape' && $('mapWrap').classList.contains('full')) $('fullBtn').click(); });
@@ -1974,7 +1978,7 @@
     try {
       lxSock = new WebSocket(LX_HOSTS[lxHostIdx % LX_HOSTS.length]);
       lxSock.onopen = () => { lxSock.send(JSON.stringify({a:111})); $('lxNote').textContent = 'lightning live'; };
-      lxSock.onmessage = ev => { try { const j = JSON.parse(lxDecode(ev.data)); if (typeof j.lat !== 'number') return; if (haversine(loc.lat, loc.lon, j.lat, j.lon) > 300) return; lxStrikes.push({lat:j.lat, lon:j.lon, t: j.time ? j.time/1e6 : Date.now()}); if (lxStrikes.length > 4000) lxStrikes.splice(0, 1000); } catch(e){} };
+      lxSock.onmessage = ev => { try { const j = JSON.parse(lxDecode(ev.data)); if (typeof j.lat !== 'number') return; if (haversine(loc.lat, loc.lon, j.lat, j.lon) > 300) return; lxStrikes.push({lat:j.lat, lon:j.lon, t: j.time ? j.time/1e6 : Date.now()}); if (lxStrikes.length > 2500) lxStrikes.splice(0, 800); } catch(e){} };
       lxSock.onclose = () => { lxSock = null; lxHostIdx++; if (showLx) setTimeout(lxConnect, lxHostIdx < LX_HOSTS.length ? 3000 : 30000); };
       lxSock.onerror = () => { try { lxSock.close(); } catch(e){} };
     } catch(e) { lxSock = null; }
@@ -1987,9 +1991,11 @@
     if (showLx && product !== 'HRRR') {
       let nearest = null;
       const bolt = (col, op, fresh) => L.divIcon({className:'', iconSize:[0,0], iconAnchor:[0,0], html:`<svg class="lx-bolt${fresh?' fresh':''}" viewBox="0 0 24 24" style="opacity:${op}"><path d="M13 2 4 14h6l-1 8 9-12h-6z" fill="${col}" stroke="#3a2a00" stroke-width="1"/></svg>`});
-      for (const s of lxStrikes) { const age = (now - s.t)/60000; const op = Math.max(.2, 1 - age/20); const col = age < 2 ? '#fff6b0' : age < 8 ? '#ffd54a' : '#ff8a00';
-        L.marker([s.lat, s.lon], {icon: bolt(col, op, age < 2), interactive:false}).addTo(lxLayer);
-        const d = haversine(loc.lat, loc.lon, s.lat, s.lon); if (!nearest || d < nearest.d) nearest = {d, s}; }
+      const LX_MAX = innerWidth < 700 ? 400 : 900;
+      let draw = lxStrikes; if (draw.length > LX_MAX) { draw = lxStrikes.map(x => ({x, d: haversine(loc.lat, loc.lon, x.lat, x.lon)})).sort((a,b) => a.d - b.d).slice(0, LX_MAX).map(o => o.x); }
+      for (const s of draw) { const age = (now - s.t)/60000; const op = Math.max(.2, 1 - age/20); const col = age < 2 ? '#fff6b0' : age < 8 ? '#ffd54a' : '#ff8a00';
+        L.marker([s.lat, s.lon], {icon: bolt(col, op, age < 2), interactive:false}).addTo(lxLayer); }
+      for (const s of lxStrikes) { const d = haversine(loc.lat, loc.lon, s.lat, s.lon); if (!nearest || d < nearest.d) nearest = {d, s}; }
       lxLayer.addTo(map);
       $('lxNote').textContent = nearest ? `nearest strike ${nearest.d < 1 ? '<1' : Math.round(nearest.d)} mi ${dirName(bearing(loc.lat,loc.lon,nearest.s.lat,nearest.s.lon))} · ${Math.round((now-nearest.s.t)/60000)} min ago` : (lxSock ? 'no strikes within 300 mi' : 'lightning feed offline');
     } else $('lxNote').textContent = '';
@@ -2025,9 +2031,9 @@
   }
   function startWind() {
     stopWind(); if (!showWind || !windGrid) return;
-    const r = $('map').getBoundingClientRect(); const dpr = Math.min(devicePixelRatio||1, 2);
-    wc.width = r.width*dpr; wc.height = r.height*dpr; wctx.setTransform(dpr,0,0,dpr,0,0);
-    const W = r.width, H = r.height, count = Math.round(W*H/900);
+    const r = $('map').getBoundingClientRect(); const dpr = 1;
+    wc.width = r.width; wc.height = r.height; wctx.setTransform(1,0,0,1,0,0);
+    const W = r.width, H = r.height, count = Math.round(W*H/(innerWidth < 700 ? 1600 : 900));
     const spawn = () => ({x:Math.random()*W, y:Math.random()*H, life:Math.random()*80+20});
     windParts = Array.from({length:count}, spawn);
     const scale = 0.06;   // mph -> pixels per frame
